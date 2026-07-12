@@ -87,8 +87,7 @@ export const createOrder =
         success: true,
 
         key:
-          process.env
-            .RAZORPAY_KEY_ID,
+          1,
 
         orderId:
           order.id,
@@ -125,8 +124,7 @@ export const verifyPayment =
         crypto
           .createHmac(
             "sha256",
-            process.env
-              .RAZORPAY_KEY_SECRET
+            1
           )
           .update(
             `${razorpay_order_id}|${razorpay_payment_id}`

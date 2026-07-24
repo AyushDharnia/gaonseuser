@@ -1,11 +1,34 @@
-import crypto from "crypto";
 import axios from "axios";
+import qs from "qs";
 import { Wallet } from "../models/walletModel.js";
 import { Payment } from "../models/paymentModel.js";
 
-/* ===================================
-   GET WALLET
-=================================== */
+// ===================================
+// HELPER: GET PHONEPE OAUTH TOKEN
+// ===================================
+const getPhonePeToken = async () => {
+  const env = process.env.PHONEPE_ENV || 'UAT';
+  const url = env === 'PROD' 
+    ? 'https://api.phonepe.com/apis/identity-manager/v1/oauth/token'
+    : 'https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token';
+
+  const data = qs.stringify({
+    client_id: process.env.PHONEPE_CLIENT_ID,
+    client_secret: process.env.PHONEPE_CLIENT_SECRET,
+    client_version: process.env.PHONEPE_CLIENT_VERSION || '1',
+    grant_type: 'client_credentials'
+  });
+
+  const response = await axios.post(url, data, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+  });
+  
+  return response.data.access_token;
+};
+
+// ===================================
+// GET WALLET
+// ===================================
 export const getWallet = async (req, res) => {
   try {
     let wallet = await Wallet.findOne({ user: req.user._id });
@@ -19,9 +42,9 @@ export const getWallet = async (req, res) => {
   }
 };
 
-/* ===================================
-   CREATE ORDER (PhonePe)
-=================================== */
+// ===================================
+// CREATE ORDER (PhonePe V2)
+// ===================================
 export const createOrder = async (req, res) => {
   try {
     const amount = Number(req.body.amount);
@@ -29,83 +52,79 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid amount" });
     }
 
-    const merchantTransactionId = `TXN_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const merchantOrderId = `TXN_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const merchantId = process.env.PHONEPE_MERCHANT_ID;
+    
+    // Get V2 Auth Token
+    const accessToken = await getPhonePeToken();
 
-    const merchantId = process.env.PHONEPE_MERCHANT_ID || 'PGTESTPAYUAT';
-    const saltKey = process.env.PHONEPE_SALT_KEY || '099eb0cd-02cf-4e2a-8aca-3e6c6aff0399';
-    const saltIndex = process.env.PHONEPE_SALT_INDEX || '1';
     const env = process.env.PHONEPE_ENV || 'UAT';
-
     const baseUrl = env === 'PROD' 
-      ? 'https://api.phonepe.com/apis/hermes/pg/v1/pay'
-      : 'https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/pay';
+      ? 'https://api.phonepe.com/apis/pg/checkout/v2/pay'
+      : 'https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/pay';
 
     const payload = {
-      merchantId: merchantId,
-      merchantTransactionId: merchantTransactionId,
-      merchantUserId: req.user._id.toString(),
+      merchantOrderId: merchantOrderId,
       amount: amount * 100, // in paise
-      redirectUrl: 'https://success.phonepe/',
-      redirectMode: 'REDIRECT',
-      callbackUrl: 'https://success.phonepe/', // Optional S2S callback
-      paymentInstrument: {
-        type: 'PAY_PAGE'
+      paymentFlow: {
+        type: 'PG_CHECKOUT',
+        message: 'Wallet Topup',
+        merchantUrls: {
+          redirectUrl: `https://gaonse.in/payment-success?id=${merchantOrderId}` // Default redirect to website root if no deep link
+        }
       }
     };
 
-    const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64');
-    const stringToHash = base64Payload + '/pg/v1/pay' + saltKey;
-    const sha256 = crypto.createHash('sha256').update(stringToHash).digest('hex');
-    const checksum = sha256 + '###' + saltIndex;
+    // Note: The V2 API does not require merchantId in the payload root in the same way, 
+    // but some implementations require it inside a metaInfo or it's just tracked by the token.
+    // The official V2 payload only requires merchantOrderId, amount, paymentFlow.
 
     const options = {
       method: 'POST',
       url: baseUrl,
       headers: {
-        accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-VERIFY': checksum
+        'Authorization': `O-Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
       },
-      data: {
-        request: base64Payload
-      }
+      data: payload
     };
 
     const response = await axios(options);
 
-    if (response.data.success) {
-      await Payment.create({
-        user: req.user._id,
-        amount,
-        transactionId: merchantTransactionId,
-        status: "created",
-      });
+    // Save payment record to DB
+    await Payment.create({
+      user: req.user._id,
+      amount,
+      transactionId: merchantOrderId,
+      status: "created",
+    });
 
+    // The redirect URL is typically located in response.data.redirectUrl
+    const redirectUrl = response.data.redirectUrl || response.data?.instrumentResponse?.redirectInfo?.url;
+
+    if (redirectUrl) {
       res.json({
         success: true,
-        redirectUrl: response.data.data.instrumentResponse.redirectInfo.url,
-        transactionId: merchantTransactionId,
-        amount,
+        redirectUrl: redirectUrl,
+        transactionId: merchantOrderId
       });
     } else {
-      throw new Error(response.data.message || 'Error creating PhonePe order');
+      res.status(500).json({ success: false, message: "Failed to generate payment link" });
     }
-
   } catch (error) {
-    console.log("CREATE ORDER ERROR:", error?.response?.data || error);
-    res.status(500).json({ success: false, message: error.message });
+    console.log("CREATE ORDER ERROR (V2):", error?.response?.data || error);
+    res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 };
 
-/* ===================================
-   VERIFY PAYMENT (PhonePe)
-=================================== */
+// ===================================
+// VERIFY PAYMENT (PhonePe V2)
+// ===================================
 export const verifyPayment = async (req, res) => {
   try {
     const { transactionId } = req.body;
-
     if (!transactionId) {
-      return res.status(400).json({ success: false, message: "transactionId is required" });
+      return res.status(400).json({ success: false, message: "Transaction ID is required" });
     }
 
     const payment = await Payment.findOne({ transactionId });
@@ -113,149 +132,148 @@ export const verifyPayment = async (req, res) => {
       return res.status(404).json({ success: false, message: "Payment not found" });
     }
 
-    if (payment.status === "paid") {
-      return res.json({ success: true, message: "Already processed" });
+    // If already processed
+    if (payment.status === "completed") {
+      return res.json({ success: true, message: "Payment already verified", payment });
+    }
+    if (payment.status === "failed") {
+      return res.json({ success: false, message: "Payment was failed", payment });
     }
 
-    const merchantId = process.env.PHONEPE_MERCHANT_ID || 'PGTESTPAYUAT';
-    const saltKey = process.env.PHONEPE_SALT_KEY || '099eb0cd-02cf-4e2a-8aca-3e6c6aff0399';
-    const saltIndex = process.env.PHONEPE_SALT_INDEX || '1';
+    // Get V2 Auth Token
+    const accessToken = await getPhonePeToken();
+
     const env = process.env.PHONEPE_ENV || 'UAT';
-
+    const merchantId = process.env.PHONEPE_MERCHANT_ID;
+    
+    // Status Check API V2 URL
     const baseUrl = env === 'PROD'
-      ? `https://api.phonepe.com/apis/hermes/pg/v1/status/${merchantId}/${transactionId}`
-      : `https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/status/${merchantId}/${transactionId}`;
-
-    const stringToHash = `/pg/v1/status/${merchantId}/${transactionId}` + saltKey;
-    const sha256 = crypto.createHash('sha256').update(stringToHash).digest('hex');
-    const checksum = sha256 + '###' + saltIndex;
+      ? `https://api.phonepe.com/apis/pg/checkout/v2/order/${transactionId}/status`
+      : `https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/${transactionId}/status`;
 
     const options = {
       method: 'GET',
       url: baseUrl,
       headers: {
-        accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-VERIFY': checksum,
-        'X-MERCHANT-ID': merchantId
+        'Authorization': `O-Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
       }
     };
 
     const response = await axios(options);
+    
+    // V2 status response typically has state 'COMPLETED', 'FAILED', 'PENDING'
+    const status = response.data.state || response.data.status; 
 
-    if (response.data.success && response.data.code === 'PAYMENT_SUCCESS') {
-      payment.status = "paid";
+    if (status === 'COMPLETED' || status === 'PAYMENT_SUCCESS') {
+      payment.status = "completed";
+      payment.paymentId = response.data.transactionId || transactionId;
       await payment.save();
 
+      // Update wallet
       let wallet = await Wallet.findOne({ user: payment.user });
       if (!wallet) {
         wallet = await Wallet.create({ user: payment.user, balance: 0 });
       }
-
-      wallet.balance = Number(wallet.balance || 0) + Number(payment.amount);
-      wallet.transactions.unshift({
-        amount: Number(payment.amount),
+      wallet.balance += payment.amount;
+      wallet.transactions.push({
         type: "credit",
-        date: new Date(),
+        amount: payment.amount,
+        description: "Wallet Top-up via PhonePe",
+        date: new Date()
       });
-
       await wallet.save();
 
-      res.json({ success: true, message: "Wallet credited successfully" });
+      return res.json({ success: true, message: "Payment verified successfully", payment });
+    } else if (status === 'FAILED' || status === 'PAYMENT_ERROR') {
+      payment.status = "failed";
+      await payment.save();
+      return res.json({ success: false, message: "Payment failed", payment });
     } else {
-      res.status(400).json({ success: false, message: "Payment verification failed" });
+      return res.json({ success: false, message: `Payment status is ${status}`, payment });
     }
   } catch (error) {
-    console.log("VERIFY PAYMENT ERROR:", error?.response?.data || error);
-    res.status(500).json({ success: false, message: error.message });
+    console.log("VERIFY PAYMENT ERROR (V2):", error?.response?.data || error);
+    res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 };
 
-/* ===================================
-   WEBHOOK (PhonePe)
-=================================== */
+// ===================================
+// PHONEPE WEBHOOK (V2)
+// ===================================
 export const phonepeWebhook = async (req, res) => {
   try {
-    let transactionId = null;
-
-    // Handle different PhonePe Webhook payload formats
-    if (req.body.response) {
-      // Base64 encoded payload
-      const decodedResponse = Buffer.from(req.body.response, "base64").toString("utf-8");
-      const parsedData = JSON.parse(decodedResponse);
-      transactionId = parsedData?.data?.merchantTransactionId;
-    } else if (req.body.data && req.body.data.merchantTransactionId) {
-      // Direct JSON payload
-      transactionId = req.body.data.merchantTransactionId;
-    } else if (req.body.merchantTransactionId) {
-      // Flat JSON payload
-      transactionId = req.body.merchantTransactionId;
+    // PhonePe V2 webhook payload is typically a JSON body
+    const payload = req.body;
+    
+    // Acknowledge receipt immediately
+    res.status(200).send("OK");
+    
+    // Webhook often contains merchantOrderId in payload body
+    let transactionId;
+    if (payload && payload.payload && payload.payload.merchantOrderId) {
+      transactionId = payload.payload.merchantOrderId;
+    } else if (payload && payload.merchantOrderId) {
+      transactionId = payload.merchantOrderId;
     }
-
+    
     if (!transactionId) {
-      return res.status(400).send("Invalid payload");
+      console.log("Invalid webhook payload structure, no transaction ID found");
+      return;
     }
 
+    // Check payment status locally
     const payment = await Payment.findOne({ transactionId });
-    if (!payment) {
-      return res.status(404).send("Payment not found");
+    if (!payment || payment.status === 'completed' || payment.status === 'failed') {
+      // Already processed or not found
+      return;
     }
 
-    if (payment.status === "paid") {
-      return res.status(200).send("Already processed");
-    }
-
-    // Securely Verify Status directly with PhonePe
-    const merchantId = process.env.PHONEPE_MERCHANT_ID;
-    const saltKey = process.env.PHONEPE_SALT_KEY;
-    const saltIndex = process.env.PHONEPE_SALT_INDEX || '1';
+    // Call verifyPayment directly using our secure Server-to-Server flow to ensure the webhook isn't spoofed
+    // This is safer than relying solely on webhook HMAC signatures
+    
+    const accessToken = await getPhonePeToken();
     const env = process.env.PHONEPE_ENV || 'UAT';
-
     const baseUrl = env === 'PROD'
-      ? `https://api.phonepe.com/apis/hermes/pg/v1/status/${merchantId}/${transactionId}`
-      : `https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/status/${merchantId}/${transactionId}`;
-
-    const stringToHash = `/pg/v1/status/${merchantId}/${transactionId}` + saltKey;
-    const sha256 = crypto.createHash('sha256').update(stringToHash).digest('hex');
-    const checksum = sha256 + '###' + saltIndex;
+      ? `https://api.phonepe.com/apis/pg/checkout/v2/order/${transactionId}/status`
+      : `https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/${transactionId}/status`;
 
     const options = {
       method: 'GET',
       url: baseUrl,
       headers: {
-        accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-VERIFY': checksum,
-        'X-MERCHANT-ID': merchantId
+        'Authorization': `O-Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
       }
     };
 
-    const statusResponse = await axios(options);
+    const response = await axios(options);
+    const status = response.data.state || response.data.status;
 
-    if (statusResponse.data.success && statusResponse.data.code === 'PAYMENT_SUCCESS') {
-      payment.status = "paid";
+    if (status === 'COMPLETED' || status === 'PAYMENT_SUCCESS') {
+      payment.status = "completed";
+      payment.paymentId = response.data.transactionId || transactionId;
       await payment.save();
 
       let wallet = await Wallet.findOne({ user: payment.user });
       if (!wallet) {
         wallet = await Wallet.create({ user: payment.user, balance: 0 });
       }
-
-      wallet.balance = Number(wallet.balance || 0) + Number(payment.amount);
-      wallet.transactions.unshift({
-        amount: Number(payment.amount),
+      wallet.balance += payment.amount;
+      wallet.transactions.push({
         type: "credit",
-        date: new Date(),
+        amount: payment.amount,
+        description: "Wallet Top-up via PhonePe (Webhook)",
+        date: new Date()
       });
-
       await wallet.save();
+      console.log(`Payment ${transactionId} verified successfully via webhook`);
+    } else if (status === 'FAILED' || status === 'PAYMENT_ERROR') {
+      payment.status = "failed";
+      await payment.save();
+      console.log(`Payment ${transactionId} marked as failed via webhook`);
     }
-
-    // Always return 200 OK to PhonePe so they stop retrying the webhook
-    res.status(200).send("OK");
   } catch (error) {
-    console.log("WEBHOOK ERROR:", error?.message);
-    // If our server crashed, return 500 so PhonePe retries later
-    res.status(500).send("Webhook Error");
+    console.log("WEBHOOK ERROR (V2):", error?.response?.data || error.message);
   }
 };

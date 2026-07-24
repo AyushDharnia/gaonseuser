@@ -3,6 +3,7 @@ import {
   getWallet,
   createOrder,
   verifyPayment,
+  phonepeWebhook,
 } from "../controllers/walletController.js";
 
 import { isAuthenticated } from "../middlewares/auth.js";
@@ -34,6 +35,14 @@ router.post(
   "/verify-payment",
    isAuthenticated,
   verifyPayment
+);
+
+/* ===================================
+   WEBHOOK
+=================================== */
+router.post(
+  "/webhook",
+  phonepeWebhook
 );
 
 export default router;

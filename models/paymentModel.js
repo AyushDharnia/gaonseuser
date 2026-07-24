@@ -15,10 +15,11 @@ const paymentSchema =
         required: true,
       },
 
-      razorpayOrderId: String,
-
-      razorpayPaymentId:
-        String,
+      transactionId: {
+        type: String,
+        required: true,
+        unique: true,
+      },
 
       status: {
         type: String,

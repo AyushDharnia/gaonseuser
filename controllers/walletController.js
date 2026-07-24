@@ -85,12 +85,16 @@ export const createOrder = async (req, res) => {
       headers: {
         'Authorization': `O-Bearer ${accessToken}`,
         'Content-Type': 'application/json',
-        'X-CALLBACK-URL': 'https://api.gaonse.in/api/v1/wallet/phonepe-webhook'
+        'X-CALLBACK-URL': 'https://api.gaonse.in/api/v1/wallet/webhook'
       },
       data: payload
     };
 
+    console.log("CREATE ORDER PAYLOAD:", JSON.stringify(payload, null, 2));
+
     const response = await axios(options);
+    
+    console.log("CREATE ORDER RESPONSE DATA:\n", JSON.stringify(response.data, null, 2));
 
     // Save payment record to DB
     await Payment.create({
@@ -113,7 +117,10 @@ export const createOrder = async (req, res) => {
       res.status(500).json({ success: false, message: "Failed to generate payment link" });
     }
   } catch (error) {
-    console.log("CREATE ORDER ERROR (V2):", error?.response?.data || error);
+    console.log("CREATE ORDER ERROR STATUS:", error?.response?.status);
+    console.log("CREATE ORDER ERROR HEADERS:", error?.response?.headers);
+    console.log("CREATE ORDER ERROR DATA:", error?.response?.data);
+    console.log("CREATE ORDER REQUEST URL:", error?.config?.url);
     res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 };
@@ -194,7 +201,9 @@ export const verifyPayment = async (req, res) => {
       return res.json({ success: false, message: `Payment status is ${status}`, payment });
     }
   } catch (error) {
-    console.log("VERIFY PAYMENT ERROR (V2):", error?.response?.data || error);
+    console.log("VERIFY PAYMENT ERROR STATUS:", error?.response?.status);
+    console.log("VERIFY PAYMENT ERROR HEADERS:", error?.response?.headers);
+    console.log("VERIFY PAYMENT ERROR DATA:", error?.response?.data);
     res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 };
@@ -206,6 +215,8 @@ export const phonepeWebhook = async (req, res) => {
   try {
     // PhonePe V2 webhook payload is typically a JSON body
     const payload = req.body;
+    
+    console.log("WEBHOOK RECEIVED PAYLOAD:\n", JSON.stringify(payload, null, 2));
     
     // Acknowledge receipt immediately
     res.status(200).send("OK");

@@ -84,7 +84,8 @@ export const createOrder = async (req, res) => {
       url: baseUrl,
       headers: {
         'Authorization': `O-Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'X-CALLBACK-URL': 'https://api.gaonse.in/api/v1/wallet/phonepe-webhook'
       },
       data: payload
     };

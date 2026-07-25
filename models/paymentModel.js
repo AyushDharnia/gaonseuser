@@ -25,7 +25,7 @@ const paymentSchema =
         type: String,
         enum: [
           "created",
-          "paid",
+          "completed",
           "failed",
         ],
         default: "created",

@@ -3,15 +3,15 @@ import qs from "qs";
 import { Wallet } from "../models/walletModel.js";
 import { Payment } from "../models/paymentModel.js";
 
+const PHONEPE_OAUTH_URL = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token";
+const PHONEPE_CHECKOUT_URL = "https://api.phonepe.com/apis/pg/checkout/v2/pay";
+const getPhonePeStatusUrl = (transactionId) =>
+  `https://api.phonepe.com/apis/pg/checkout/v2/order/${transactionId}/status`;
+
 // ===================================
 // HELPER: GET PHONEPE OAUTH TOKEN
 // ===================================
 const getPhonePeToken = async () => {
-  const env = process.env.PHONEPE_ENV || 'UAT';
-  const url = env === 'PROD' 
-    ? 'https://api.phonepe.com/apis/identity-manager/v1/oauth/token'
-    : 'https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token';
-
   const data = qs.stringify({
     client_id: process.env.PHONEPE_CLIENT_ID,
     client_secret: process.env.PHONEPE_CLIENT_SECRET,
@@ -19,10 +19,12 @@ const getPhonePeToken = async () => {
     grant_type: 'client_credentials'
   });
 
-  const response = await axios.post(url, data, {
+  const response = await axios.post(PHONEPE_OAUTH_URL, data, {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
   });
-  
+
+  console.log("PhonePe OAuth token obtained successfully.");
+
   return response.data.access_token;
 };
 
@@ -54,14 +56,11 @@ export const createOrder = async (req, res) => {
 
     const merchantOrderId = `TXN_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const merchantId = process.env.PHONEPE_MERCHANT_ID;
-    
+
     // Get V2 Auth Token
     const accessToken = await getPhonePeToken();
 
-    const env = process.env.PHONEPE_ENV || 'UAT';
-    const baseUrl = env === 'PROD' 
-      ? 'https://api.phonepe.com/apis/pg/checkout/v2/pay'
-      : 'https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/pay';
+    const baseUrl = PHONEPE_CHECKOUT_URL;
 
     const payload = {
       merchantOrderId: merchantOrderId,
@@ -90,11 +89,7 @@ export const createOrder = async (req, res) => {
       data: payload
     };
 
-    console.log("CREATE ORDER PAYLOAD:", JSON.stringify(payload, null, 2));
-
     const response = await axios(options);
-    
-    console.log("CREATE ORDER RESPONSE DATA:\n", JSON.stringify(response.data, null, 2));
 
     // Save payment record to DB
     await Payment.create({
@@ -108,6 +103,7 @@ export const createOrder = async (req, res) => {
     const redirectUrl = response.data.redirectUrl || response.data?.instrumentResponse?.redirectInfo?.url;
 
     if (redirectUrl) {
+      console.log(`PhonePe checkout created for order ${merchantOrderId}.`);
       res.json({
         success: true,
         redirectUrl: redirectUrl,
@@ -151,13 +147,7 @@ export const verifyPayment = async (req, res) => {
     // Get V2 Auth Token
     const accessToken = await getPhonePeToken();
 
-    const env = process.env.PHONEPE_ENV || 'UAT';
-    const merchantId = process.env.PHONEPE_MERCHANT_ID;
-    
-    // Status Check API V2 URL
-    const baseUrl = env === 'PROD'
-      ? `https://api.phonepe.com/apis/pg/checkout/v2/order/${transactionId}/status`
-      : `https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/${transactionId}/status`;
+    const baseUrl = getPhonePeStatusUrl(transactionId);
 
     const options = {
       method: 'GET',
@@ -169,9 +159,12 @@ export const verifyPayment = async (req, res) => {
     };
 
     const response = await axios(options);
-    
+    console.log("========== STATUS API RESPONSE ==========");
+    console.log(JSON.stringify(response.data, null, 2));
+    console.log("=========================================");
+
     // V2 status response typically has state 'COMPLETED', 'FAILED', 'PENDING'
-    const status = response.data.state || response.data.status; 
+    const status = response.data.state || response.data.status;
 
     if (status === 'COMPLETED' || status === 'PAYMENT_SUCCESS') {
       payment.status = "completed";
@@ -215,12 +208,12 @@ export const phonepeWebhook = async (req, res) => {
   try {
     // PhonePe V2 webhook payload is typically a JSON body
     const payload = req.body;
-    
+
     console.log("WEBHOOK RECEIVED PAYLOAD:\n", JSON.stringify(payload, null, 2));
-    
+
     // Acknowledge receipt immediately
     res.status(200).send("OK");
-    
+
     // Webhook often contains merchantOrderId in payload body
     let transactionId;
     if (payload && payload.payload && payload.payload.merchantOrderId) {
@@ -228,7 +221,7 @@ export const phonepeWebhook = async (req, res) => {
     } else if (payload && payload.merchantOrderId) {
       transactionId = payload.merchantOrderId;
     }
-    
+
     if (!transactionId) {
       console.log("Invalid webhook payload structure, no transaction ID found");
       return;
@@ -243,12 +236,9 @@ export const phonepeWebhook = async (req, res) => {
 
     // Call verifyPayment directly using our secure Server-to-Server flow to ensure the webhook isn't spoofed
     // This is safer than relying solely on webhook HMAC signatures
-    
+
     const accessToken = await getPhonePeToken();
-    const env = process.env.PHONEPE_ENV || 'UAT';
-    const baseUrl = env === 'PROD'
-      ? `https://api.phonepe.com/apis/pg/checkout/v2/order/${transactionId}/status`
-      : `https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/${transactionId}/status`;
+    const baseUrl = getPhonePeStatusUrl(transactionId);
 
     const options = {
       method: 'GET',
@@ -260,6 +250,9 @@ export const phonepeWebhook = async (req, res) => {
     };
 
     const response = await axios(options);
+    console.log("========== WEBHOOK STATUS RESPONSE ==========");
+    console.log(JSON.stringify(response.data, null, 2));
+    console.log("=============================================");
     const status = response.data.state || response.data.status;
 
     if (status === 'COMPLETED' || status === 'PAYMENT_SUCCESS') {

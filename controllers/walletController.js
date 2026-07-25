@@ -210,13 +210,15 @@ export const verifyPayment = async (req, res) => {
       });
       await wallet.save();
 
-      return res.json({ success: true, message: "Payment verified successfully", payment });
+      return res.json({ success: true, message: "Payment verified successfully", payment, status: "completed" });
     } else if (status === 'FAILED' || status === 'PAYMENT_ERROR') {
       payment.status = "failed";
       await payment.save();
-      return res.json({ success: false, message: "Payment failed", payment });
+      return res.json({ success: false, message: "Payment failed", payment, status: "failed" });
+    } else if (status === 'PENDING') {
+      return res.json({ success: true, message: "Payment is pending", payment, status: "pending" });
     } else {
-      return res.json({ success: false, message: `Payment status is ${status}`, payment });
+      return res.json({ success: false, message: `Payment status is ${status}`, payment, status });
     }
   } catch (error) {
     console.log("[PAYMENT DEBUG] VERIFY PAYMENT ERROR STATUS:", error?.response?.status);

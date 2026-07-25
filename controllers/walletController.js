@@ -50,6 +50,12 @@ export const getWallet = async (req, res) => {
 export const createOrder = async (req, res) => {
   try {
     const amount = Number(req.body.amount);
+    console.log("[PAYMENT DEBUG] createOrder request", {
+      userId: req.user?._id,
+      amount,
+      phonepeEnv: process.env.PHONEPE_ENV,
+    });
+
     if (!amount || amount < 1) {
       return res.status(400).json({ success: false, message: "Invalid amount" });
     }
@@ -59,6 +65,11 @@ export const createOrder = async (req, res) => {
 
     // Get V2 Auth Token
     const accessToken = await getPhonePeToken();
+    console.log("[PAYMENT DEBUG] PhonePe access token acquired", {
+      merchantId,
+      merchantOrderId,
+      tokenLength: accessToken?.length,
+    });
 
     const baseUrl = PHONEPE_CHECKOUT_URL;
 
@@ -90,7 +101,17 @@ export const createOrder = async (req, res) => {
       data: payload
     };
 
+    console.log("[PAYMENT DEBUG] PhonePe create-order payload", JSON.stringify(payload));
+    console.log("[PAYMENT DEBUG] PhonePe create-order options", {
+      url: baseUrl,
+      headers: {
+        ...options.headers,
+        Authorization: "O-Bearer [redacted]",
+      },
+    });
+
     const response = await axios(options);
+    console.log("[PAYMENT DEBUG] PhonePe create-order response", JSON.stringify(response.data));
 
     // Save payment record to DB
     await Payment.create({
@@ -114,10 +135,10 @@ export const createOrder = async (req, res) => {
       res.status(500).json({ success: false, message: "Failed to generate payment link" });
     }
   } catch (error) {
-    console.log("CREATE ORDER ERROR STATUS:", error?.response?.status);
-    console.log("CREATE ORDER ERROR HEADERS:", error?.response?.headers);
-    console.log("CREATE ORDER ERROR DATA:", error?.response?.data);
-    console.log("CREATE ORDER REQUEST URL:", error?.config?.url);
+    console.log("[PAYMENT DEBUG] CREATE ORDER ERROR STATUS:", error?.response?.status);
+    console.log("[PAYMENT DEBUG] CREATE ORDER ERROR HEADERS:", error?.response?.headers);
+    console.log("[PAYMENT DEBUG] CREATE ORDER ERROR DATA:", error?.response?.data);
+    console.log("[PAYMENT DEBUG] CREATE ORDER REQUEST URL:", error?.config?.url);
     res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 };
@@ -128,6 +149,11 @@ export const createOrder = async (req, res) => {
 export const verifyPayment = async (req, res) => {
   try {
     const { transactionId } = req.body;
+    console.log("[PAYMENT DEBUG] verifyPayment request", {
+      transactionId,
+      body: req.body,
+    });
+
     if (!transactionId) {
       return res.status(400).json({ success: false, message: "Transaction ID is required" });
     }
@@ -160,9 +186,7 @@ export const verifyPayment = async (req, res) => {
     };
 
     const response = await axios(options);
-    console.log("========== STATUS API RESPONSE ==========");
-    console.log(JSON.stringify(response.data, null, 2));
-    console.log("=========================================");
+    console.log("[PAYMENT DEBUG] verifyPayment status response", JSON.stringify(response.data, null, 2));
 
     // V2 status response typically has state 'COMPLETED', 'FAILED', 'PENDING'
     const status = response.data.state || response.data.status;
@@ -195,9 +219,9 @@ export const verifyPayment = async (req, res) => {
       return res.json({ success: false, message: `Payment status is ${status}`, payment });
     }
   } catch (error) {
-    console.log("VERIFY PAYMENT ERROR STATUS:", error?.response?.status);
-    console.log("VERIFY PAYMENT ERROR HEADERS:", error?.response?.headers);
-    console.log("VERIFY PAYMENT ERROR DATA:", error?.response?.data);
+    console.log("[PAYMENT DEBUG] VERIFY PAYMENT ERROR STATUS:", error?.response?.status);
+    console.log("[PAYMENT DEBUG] VERIFY PAYMENT ERROR HEADERS:", error?.response?.headers);
+    console.log("[PAYMENT DEBUG] VERIFY PAYMENT ERROR DATA:", error?.response?.data);
     res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 };
@@ -210,7 +234,8 @@ export const phonepeWebhook = async (req, res) => {
     // PhonePe V2 webhook payload is typically a JSON body
     const payload = req.body;
 
-    console.log("WEBHOOK RECEIVED PAYLOAD:\n", JSON.stringify(payload, null, 2));
+    console.log("[PAYMENT DEBUG] Webhook received headers", req.headers);
+    console.log("[PAYMENT DEBUG] Webhook received payload", JSON.stringify(payload, null, 2));
 
     // Acknowledge receipt immediately
     res.status(200).send("OK");
@@ -251,9 +276,7 @@ export const phonepeWebhook = async (req, res) => {
     };
 
     const response = await axios(options);
-    console.log("========== WEBHOOK STATUS RESPONSE ==========");
-    console.log(JSON.stringify(response.data, null, 2));
-    console.log("=============================================");
+    console.log("[PAYMENT DEBUG] Webhook status response", JSON.stringify(response.data, null, 2));
     const status = response.data.state || response.data.status;
 
     if (status === 'COMPLETED' || status === 'PAYMENT_SUCCESS') {
@@ -280,6 +303,6 @@ export const phonepeWebhook = async (req, res) => {
       console.log(`Payment ${transactionId} marked as failed via webhook`);
     }
   } catch (error) {
-    console.log("WEBHOOK ERROR (V2):", error?.response?.data || error.message);
+    console.log("[PAYMENT DEBUG] WEBHOOK ERROR (V2):", error?.response?.data || error.message);
   }
 };

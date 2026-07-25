@@ -63,6 +63,7 @@ export const createOrder = async (req, res) => {
     const baseUrl = PHONEPE_CHECKOUT_URL;
 
     const payload = {
+      merchantId: merchantId,
       merchantOrderId: merchantOrderId,
       amount: amount * 100, // in paise
       paymentFlow: {

@@ -3,10 +3,15 @@ import qs from "qs";
 import { Wallet } from "../models/walletModel.js";
 import { Payment } from "../models/paymentModel.js";
 
-const PHONEPE_OAUTH_URL = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token";
-const PHONEPE_CHECKOUT_URL = "https://api.phonepe.com/apis/pg/checkout/v2/pay";
+const isUAT = process.env.PHONEPE_ENV === 'UAT';
+const BASE_PHONEPE_URL = isUAT 
+  ? "https://api-preprod.phonepe.com/apis/pg-sandbox" 
+  : "https://api.phonepe.com/apis";
+
+const PHONEPE_OAUTH_URL = `${BASE_PHONEPE_URL}/identity-manager/v1/oauth/token`;
+const PHONEPE_CHECKOUT_URL = `${BASE_PHONEPE_URL}/pg/checkout/v2/pay`;
 const getPhonePeStatusUrl = (transactionId) =>
-  `https://api.phonepe.com/apis/pg/checkout/v2/order/${transactionId}/status`;
+  `${BASE_PHONEPE_URL}/pg/checkout/v2/order/${transactionId}/status`;
 
 // ===================================
 // HELPER: GET PHONEPE OAUTH TOKEN

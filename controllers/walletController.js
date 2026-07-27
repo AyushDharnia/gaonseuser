@@ -3,10 +3,7 @@ import qs from "qs";
 import { Wallet } from "../models/walletModel.js";
 import { Payment } from "../models/paymentModel.js";
 
-const isUAT = process.env.PHONEPE_ENV === 'UAT';
-const BASE_PHONEPE_URL = isUAT 
-  ? "https://api-preprod.phonepe.com/apis/pg-sandbox" 
-  : "https://api.phonepe.com/apis";
+const BASE_PHONEPE_URL = "https://api.phonepe.com/apis";
 
 const PHONEPE_OAUTH_URL = `${BASE_PHONEPE_URL}/identity-manager/v1/oauth/token`;
 const PHONEPE_CHECKOUT_URL = `${BASE_PHONEPE_URL}/pg/checkout/v2/pay`;
@@ -87,7 +84,7 @@ export const createOrder = async (req, res) => {
         message: 'Wallet Topup',
         merchantUrls: {
           // CRITICAL: Point redirectUrl back to the app's custom scheme for deep-linking
-          redirectUrl: `client://payment-success?id=${merchantOrderId}` 
+          redirectUrl: `client://payment-success?id=${merchantOrderId}`
         }
       }
     };

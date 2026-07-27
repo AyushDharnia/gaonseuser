@@ -86,14 +86,11 @@ export const createOrder = async (req, res) => {
         type: 'PG_CHECKOUT',
         message: 'Wallet Topup',
         merchantUrls: {
-          redirectUrl: `https://gaonse.in/payment-success?id=${merchantOrderId}` // Default redirect to website root if no deep link
+          // CRITICAL: Point redirectUrl back to the app's custom scheme for deep-linking
+          redirectUrl: `client://payment-success?id=${merchantOrderId}` 
         }
       }
     };
-
-    // Note: The V2 API does not require merchantId in the payload root in the same way, 
-    // but some implementations require it inside a metaInfo or it's just tracked by the token.
-    // The official V2 payload only requires merchantOrderId, amount, paymentFlow.
 
     const options = {
       method: 'POST',
@@ -107,13 +104,6 @@ export const createOrder = async (req, res) => {
     };
 
     console.log("[PAYMENT DEBUG] PhonePe create-order payload", JSON.stringify(payload));
-    console.log("[PAYMENT DEBUG] PhonePe create-order options", {
-      url: baseUrl,
-      headers: {
-        ...options.headers,
-        Authorization: "O-Bearer [redacted]",
-      },
-    });
 
     const response = await axios(options);
     console.log("[PAYMENT DEBUG] PhonePe create-order response", JSON.stringify(response.data));
@@ -143,7 +133,6 @@ export const createOrder = async (req, res) => {
     console.log("[PAYMENT DEBUG] CREATE ORDER ERROR STATUS:", error?.response?.status);
     console.log("[PAYMENT DEBUG] CREATE ORDER ERROR HEADERS:", error?.response?.headers);
     console.log("[PAYMENT DEBUG] CREATE ORDER ERROR DATA:", error?.response?.data);
-    console.log("[PAYMENT DEBUG] CREATE ORDER REQUEST URL:", error?.config?.url);
     res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 };

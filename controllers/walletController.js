@@ -60,9 +60,12 @@ export const getWallet = async (req, res) => {
 export const createOrder = async (req, res) => {
   try {
     const amount = Number(req.body.amount);
+    const deviceOS = req.body.deviceOS || "ANDROID"; // Default to ANDROID if not provided
+
     console.log("[PAYMENT DEBUG] createOrder request", {
       userId: req.user?._id,
       amount,
+      deviceOS,
       phonepeEnv: process.env.PHONEPE_ENV,
     });
 
@@ -87,6 +90,9 @@ export const createOrder = async (req, res) => {
       merchantId: merchantId,
       merchantOrderId: merchantOrderId,
       amount: amount * 100, // in paise
+      deviceContext: {
+        deviceOS: deviceOS
+      },
       paymentFlow: {
         type: 'PG_CHECKOUT',
         message: 'Wallet Topup',
